@@ -9,12 +9,15 @@ function preload() {
     this.load.path = 'assets/images/';
     this.load.image('splash', 'splash.png');
     this.load.image('mountain', 'mountain.png');
+    this.load.image('moon', 'moon.png');
+    this.load.image('border', 'border marker.png');
     this.load.image('scoreboard', 'scoreboard.png');
     this.load.image('background', 'background.png');
-    this.load.spritesheet('hq', 'hq.png',288,56);
+    this.load.spritesheet('house', 'house.png',61,41);
+    this.load.spritesheet('hq', 'hq.png',358,66);
     this.load.spritesheet('player', 'chopper.png',80,46);
+    this.load.spritesheet('star', 'stars.png',8,5);
  
-   
     this.load.start();
   }
   
