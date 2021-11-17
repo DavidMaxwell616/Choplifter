@@ -14,3 +14,7 @@ var playerStartX = 210;
 var houses;
 var border;
 var stars;
+var postX = 600;
+var livesSaved = 0;
+var livesLost = 0;
+var livesSaving = 0;

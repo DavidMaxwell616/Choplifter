@@ -22,7 +22,6 @@ function gameCreate() {
   player.xv = 0;
   player.yv = 0;
   game.physics.enable(player, Phaser.Physics.ARCADE);
-  player.body.gravity.y = 500;
   player.body.collideWorldBounds = true
 
   var anim = player.animations.add('player', [0,1,2,3],20, true);
@@ -57,17 +56,23 @@ function BuildWorld(){
     var house = game.add.image(1600+index*400,playerStartY, 'house');
     houses.add(house);
   }
-
-  for (let index = 0; index < 4; index++) {
-    var increment = 100/index+1
-    var borderPost = game.add.image(400,playerStartY+increment, 'border');
-    borderPost.scale.setTo(.25);
-    border.add(borderPost);
-  }
     
   hq = game.add.sprite(20, playerStartY-24, 'hq');
   var anim = hq.animations.add('hq', [0,1],4, true);
   anim.play();
+  var increment = 2;
+  
+  for (let index = 0; index <8; index++) {
+    var dist = index*increment;
+    var borderPost = game.add.image(postX,(playerStartY+30)+dist, 'border');
+    borderPost.scale.setTo(index/10);
+    borderPost.moveX = index/10;
+    increment+=1;
+    postX+=20;
+    borderPost.startX = postX;
+   border.add(borderPost);
+  }
+  game.world.bringToTop(border);    
 }
 
   function update(){
@@ -76,22 +81,24 @@ function BuildWorld(){
 
     if(!gameOver)
       { 
-        stars.forEach(star => {
-          if(game.rnd.integerInRange(0,200)<10)
-          {
-            star.frame = game.rnd.integerInRange(0,2);
-            star.x = game.camera.x + star.startX;
-          }
-        });
-        mountains.forEach(mountain => {
-           mountain.x = (game.camera.x +mountain.startX)* 0.5;   
-        });
-        scoreboard.x = game.camera.x+2;
-        moon.x = game.camera.x+100;
-        if(player.y<playerStartY)
-          {
-            player.yv=0;
-          }
+      stars.forEach(star => {
+        star.x = game.camera.x + star.startX;
+        if(game.rnd.integerInRange(0,200)<10)
+          star.frame = game.rnd.integerInRange(0,2);
+      });
+      mountains.forEach(mountain => {
+        mountain.x = (game.camera.x +mountain.startX)* 0.5;   
+      });
+
+      border.forEach(post => {
+          post.x = post.startX-(game.camera.x*post.moveX);
+      });
+      scoreboard.x = game.camera.x+2;
+      moon.x = game.camera.x+100;
+      if(player.y<playerStartY)
+        {
+          player.yv=0;
+        }
       else
       {
         player.yv = 0;
