@@ -1,4 +1,5 @@
-import GameScene from './scenes/GameScene.js';
+import SplashScene from "./scenes/SplashScene.js";
+import GameScene from "./scenes/GameScene.js";
 
 const INTERNAL_W = 320;
 const INTERNAL_H = 180;
@@ -20,6 +21,5 @@ new Phaser.Game({
         height: INTERNAL_H,
         zoom: 3
     },
-    scene: [GameScene]
+    scene: [SplashScene, GameScene]
 });
-
