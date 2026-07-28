@@ -28,6 +28,8 @@ const TANK_BULLET_ARC_HEIGHT = 50;
 const TANK_BULLET_LANDING_Y = GROUND_Y + 5;
 const JET_TRIGGER_DISTANCE = 130;
 const JET_PASS_DURATION = 2.8;
+const JET_VERTICAL_TRACK_SPEED = 120;
+const JET_FIRE_VERTICAL_TOLERANCE = 2;
 const JET_MIN_COOLDOWN = 4;
 const JET_MAX_COOLDOWN = 7;
 const JET_MISSILE_SPEED = 145;
@@ -36,6 +38,9 @@ const JET_MISSILE_LAUNCH_GAP = 0.18;
 const UFO_TRIGGER_RESCUES = 30;
 const UFO_DESCENT_SPEED = 34;
 const UFO_FOLLOW_SPEED = 58;
+const UFO_BULLET_SPEED = 105;
+const UFO_FIRE_MIN_INTERVAL = 1.2;
+const UFO_FIRE_MAX_INTERVAL = 2.3;
 const PEOPLE_PER_HOUSE = 20;
 const PEOPLE_SCALE = .35;
 const HOSTAGE_WAVE_SIZE = 5;
@@ -98,6 +103,7 @@ export default class GameScene extends Phaser.Scene {
 
     create() {
         this.physics.world.setBounds(0, 28, WORLD_W, WORLD_H - 28);
+        this.physics.world.isPaused = false;
         this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
         this.cameras.main.setBackgroundColor("#000000");
 
@@ -111,6 +117,9 @@ export default class GameScene extends Phaser.Scene {
         this.facing = "left";
         this.chopperCrashing = false;
         this.chopperDestroyed = false;
+        this.chopperCrashes = 0;
+        this.respawnInvulnerability = 0;
+        this.gameOver = false;
         this.turnTarget = null;
         this.turnTimer = 0;
         this.turnInputLocked = false;
@@ -129,6 +138,7 @@ export default class GameScene extends Phaser.Scene {
         this.jetCooldown = 0;
         this.jetNearHouses = false;
         this.ufo = null;
+        this.ufoBullets = [];
         this.ufoSpawned = false;
         this.createHud();
 
@@ -496,7 +506,7 @@ export default class GameScene extends Phaser.Scene {
 
         this.helpText = this.add.text(
             160,
-            174,
+            WORLD_H,
             "",
             {
                 fontFamily: "monospace",
@@ -518,9 +528,40 @@ export default class GameScene extends Phaser.Scene {
             color: "#ffffff",
             backgroundColor: "#000000"
         }).setOrigin(0.5).setScrollFactor(0).setDepth(102).setVisible(false);
+
+        this.gameOverText = this.add.text(160, 90, "GAME OVER", {
+            fontFamily: "monospace",
+            fontSize: "22px",
+            color: "#ffffff",
+            backgroundColor: "#000000",
+            stroke: "#ff3b20",
+            strokeThickness: 2,
+            padding: { x: 8, y: 4 }
+        })
+            .setOrigin(0.5)
+            .setResolution(3)
+            .setScrollFactor(0)
+            .setDepth(200)
+            .setVisible(false);
+
+        this.gameOverStatsText = this.add.text(160, 112, "", {
+            fontFamily: "monospace",
+            fontSize: "10px",
+            color: "#ffffff",
+            backgroundColor: "#000000",
+            padding: { x: 6, y: 3 },
+            align: "center"
+        })
+            .setOrigin(0.5, 0)
+            .setResolution(3)
+            .setScrollFactor(0)
+            .setDepth(200)
+            .setVisible(false);
     }
 
     update(_, deltaMs) {
+        if (this.gameOver) return;
+
         if (Phaser.Input.Keyboard.JustDown(this.keys.R)) {
             this.scene.restart();
             return;
@@ -538,6 +579,10 @@ export default class GameScene extends Phaser.Scene {
         if (this.paused) return;
 
         const dt = Math.min(deltaMs / 1000, 0.05);
+        this.respawnInvulnerability = Math.max(
+            0,
+            this.respawnInvulnerability - dt
+        );
         this.updateChopperDirection(dt);
         this.updatePlayer(dt);
         this.updateHostages(dt);
@@ -547,6 +592,7 @@ export default class GameScene extends Phaser.Scene {
         this.updateJet(dt);
         this.updateJetMissiles(dt);
         this.updateUfo(dt);
+        this.updateUfoBullets(dt);
         this.updateBullets(dt);
 
         if (
@@ -559,6 +605,13 @@ export default class GameScene extends Phaser.Scene {
 
         this.fuel = Math.max(0, this.fuel - dt * 0.32);
         this.updateHudCounters();
+        if (
+            this.allHostagesAccountedFor() &&
+            !this.chopperCrashing &&
+            !this.chopperDestroyed
+        ) {
+            this.startGameOver();
+        }
     }
 
     updateHudCounters() {
@@ -570,7 +623,7 @@ export default class GameScene extends Phaser.Scene {
     updateControlText() {
         const soundState = this.sound.mute ? "OFF" : "ON";
         this.helpText.setText(
-            "ARROWS MOVE  SHIFT+LEFT/RIGHT TURN  SPACE FIRE\n" +
+            "ARROWS MOVE  SHIFT+LEFT/RIGHT TURN  SPACE FIRE   " +
             `ESC PAUSE  CTRL+S SOUND ${soundState}`
         );
     }
@@ -703,13 +756,82 @@ export default class GameScene extends Phaser.Scene {
     finishChopperCrash(impactY) {
         this.chopperCrashing = false;
         this.chopperDestroyed = true;
+        this.chopperCrashes += 1;
         this.dead += this.onboard;
         this.onboard = 0;
+        this.updateHudCounters();
         this.player.setAcceleration(0, 0);
         this.player.setVelocity(0, 0);
         this.player.body.enable = false;
         this.player.setVisible(false);
-        this.createExplosion(this.player.x, impactY, 1, 1);
+        this.createExplosion(this.player.x, impactY, 1, 1, () => {
+            if (
+                this.chopperCrashes >= 3 ||
+                this.allHostagesAccountedFor()
+            ) {
+                this.startGameOver();
+            } else {
+                this.respawnChopper();
+            }
+        });
+    }
+
+    respawnChopper() {
+        this.clearEnemyProjectiles();
+        this.chopperDestroyed = false;
+        this.chopperCrashing = false;
+        this.respawnInvulnerability = 1.5;
+        this.facing = "left";
+        this.lastDirection = -1;
+        this.turnTarget = null;
+        this.turnTimer = 0;
+        this.turnInputLocked = false;
+        this.player.body.enable = true;
+        this.player
+            .setPosition(BASE_X - 25, CHOPPER_GROUND_Y)
+            .setVisible(true)
+            .setAlpha(1)
+            .setAngle(0)
+            .setFlipX(false)
+            .setAcceleration(0, 0)
+            .setVelocity(0, 0)
+            .setDrag(180, 150)
+            .play("chopperSideways");
+        this.player.tiltAngle = 0;
+        this.fuel = 66;
+    }
+
+    clearEnemyProjectiles() {
+        this.tankBullets.forEach(bullet => bullet.destroy());
+        this.jetMissiles.forEach(missile => missile.destroy());
+        this.ufoBullets.forEach(bullet => bullet.destroy());
+        this.tankBullets.length = 0;
+        this.jetMissiles.length = 0;
+        this.ufoBullets.length = 0;
+    }
+
+    allHostagesAccountedFor() {
+        return this.rescued + this.dead >= this.hostages.length;
+    }
+
+    startGameOver() {
+        if (this.gameOver) return;
+
+        this.gameOver = true;
+        this.clearEnemyProjectiles();
+        this.physics.world.isPaused = true;
+        this.pauseText.setVisible(false);
+        this.gameOverText.setVisible(true);
+        this.gameOverStatsText
+            .setText(
+                `RESCUED: ${String(this.rescued).padStart(2, "0")}\n` +
+                `DEAD:    ${String(this.dead).padStart(2, "0")}`
+            )
+            .setVisible(true);
+        this.time.delayedCall(10000, () => {
+            this.physics.world.isPaused = false;
+            this.scene.start("SplashScene");
+        });
     }
 
     isChopperGrounded(maxHorizontalSpeed = Infinity) {
@@ -1034,6 +1156,19 @@ export default class GameScene extends Phaser.Scene {
                 4 * TANK_BULLET_ARC_HEIGHT * (1 - 2 * progress);
             bullet.setRotation(Math.atan2(pathY, pathX));
 
+            const hitChopper =
+                !this.chopperDestroyed &&
+                Math.abs(bullet.x - this.player.x) <
+                this.player.displayWidth * 0.45 &&
+                Math.abs(bullet.y - this.player.y) <
+                this.player.displayHeight * 0.6;
+            if (hitChopper) {
+                this.damageChopper();
+                bullet.destroy();
+                this.tankBullets.splice(i, 1);
+                continue;
+            }
+
             if (progress >= 1) {
                 this.resolveTankBulletImpact(bullet);
                 bullet.destroy();
@@ -1076,7 +1211,13 @@ export default class GameScene extends Phaser.Scene {
         burst.once("animationcomplete", () => burst.destroy());
     }
 
-    createExplosion(x, y, scrollFactor = 1, originY = 0.5) {
+    createExplosion(
+        x,
+        y,
+        scrollFactor = 1,
+        originY = 0.5,
+        onComplete = null
+    ) {
         const explosion = this.add.sprite(x, y, "explosion", 0)
             .setOrigin(0.5, originY)
             .setScale(ART_SCALE)
@@ -1084,7 +1225,10 @@ export default class GameScene extends Phaser.Scene {
             .setDepth(11)
             .play("explosion");
 
-        explosion.once("animationcomplete", () => explosion.destroy());
+        explosion.once("animationcomplete", () => {
+            explosion.destroy();
+            if (onComplete) onComplete();
+        });
     }
 
     updateJet(dt) {
@@ -1128,12 +1272,20 @@ export default class GameScene extends Phaser.Scene {
             : this.cameras.main.width + 50;
 
         this.jet.x = startX + this.jet.direction * travelWidth * progress;
-        this.jet.y = 28 + Math.sin(Math.PI * progress) * 78;
+        const playerScreenY =
+            this.player.y - this.cameras.main.scrollY;
+        const verticalStep = Phaser.Math.Clamp(
+            playerScreenY - this.jet.y,
+            -JET_VERTICAL_TRACK_SPEED * dt,
+            JET_VERTICAL_TRACK_SPEED * dt
+        );
+        this.jet.y += verticalStep;
 
-        const verticalSlope =
-            Math.PI * 78 * Math.cos(Math.PI * progress) / travelWidth;
+        const horizontalStep =
+            travelWidth / JET_PASS_DURATION * dt;
         this.jet.setRotation(
-            this.jet.direction * Math.atan(verticalSlope)
+            this.jet.direction *
+            Math.atan2(verticalStep, horizontalStep)
         );
 
         const distanceFrame = Math.round(
@@ -1148,7 +1300,9 @@ export default class GameScene extends Phaser.Scene {
         if (
             this.jet.missilesRemaining > 0 &&
             this.jet.missileCooldown <= 0 &&
-            distanceFrame <= 1
+            distanceFrame <= 1 &&
+            Math.abs(this.jet.y - playerScreenY) <=
+                JET_FIRE_VERTICAL_TOLERANCE
         ) {
             this.fireJetMissile(this.jet);
             this.jet.missilesRemaining -= 1;
@@ -1234,7 +1388,11 @@ export default class GameScene extends Phaser.Scene {
     }
 
     damageChopper() {
-        if (this.chopperCrashing || this.chopperDestroyed) return;
+        if (
+            this.chopperCrashing ||
+            this.chopperDestroyed ||
+            this.respawnInvulnerability > 0
+        ) return;
 
         this.createBombBurst(this.player.x, this.player.y);
         this.chopperCrashing = true;
@@ -1283,6 +1441,35 @@ export default class GameScene extends Phaser.Scene {
         if (this.ufo.descending && Math.abs(this.ufo.y - hoverY) < 2) {
             this.ufo.descending = false;
         }
+
+        this.ufo.fireCooldown -= dt;
+        if (
+            this.ufo.fireCooldown <= 0 &&
+            this.ufo.x < BORDER_X &&
+            !this.chopperCrashing &&
+            !this.chopperDestroyed
+        ) {
+            this.fireUfoBullet();
+            this.ufo.fireCooldown = Phaser.Math.FloatBetween(
+                UFO_FIRE_MIN_INTERVAL,
+                UFO_FIRE_MAX_INTERVAL
+            );
+        }
+
+        const hitChopper =
+            !this.chopperDestroyed &&
+            Math.abs(this.ufo.x - this.player.x) <
+                (this.ufo.displayWidth + this.player.displayWidth) * 0.4 &&
+            Math.abs(this.ufo.y - this.player.y) <
+                (this.ufo.displayHeight + this.player.displayHeight) * 0.4;
+        if (hitChopper) {
+            const impactX = this.ufo.x;
+            const impactY = this.ufo.y;
+            this.damageChopper();
+            this.ufo.destroy();
+            this.ufo = null;
+            this.createExplosion(impactX, impactY);
+        }
     }
 
     createUfo() {
@@ -1298,6 +1485,61 @@ export default class GameScene extends Phaser.Scene {
             .play("ufoHover");
         this.ufo.elapsed = 0;
         this.ufo.descending = true;
+        this.ufo.fireCooldown = Phaser.Math.FloatBetween(0.5, 1.2);
+    }
+
+    fireUfoBullet() {
+        if (!this.ufo) return;
+
+        const deltaX = this.player.x - this.ufo.x;
+        const deltaY = this.player.y - this.ufo.y;
+        const distance = Math.max(1, Math.hypot(deltaX, deltaY));
+        const bullet = this.add.image(
+            this.ufo.x,
+            this.ufo.y + this.ufo.displayHeight * 0.5,
+            "bullet"
+        )
+            .setScale(BULLET_SCALE)
+            .setTint(0x00c8ff)
+            .setDepth(9);
+
+        bullet.velocityX = deltaX / distance * UFO_BULLET_SPEED;
+        bullet.velocityY = deltaY / distance * UFO_BULLET_SPEED;
+        bullet.setRotation(Math.atan2(bullet.velocityY, bullet.velocityX));
+        this.ufoBullets.push(bullet);
+    }
+
+    updateUfoBullets(dt) {
+        for (let i = this.ufoBullets.length - 1; i >= 0; i -= 1) {
+            const bullet = this.ufoBullets[i];
+            bullet.x += bullet.velocityX * dt;
+            bullet.y += bullet.velocityY * dt;
+
+            const crossedBorder =
+                bullet.velocityX > 0 &&
+                bullet.x + bullet.displayWidth * 0.5 >= BORDER_X;
+            const hitChopper =
+                !crossedBorder &&
+                !this.chopperDestroyed &&
+                Math.abs(bullet.x - this.player.x) <
+                    this.player.displayWidth * 0.45 &&
+                Math.abs(bullet.y - this.player.y) <
+                    this.player.displayHeight * 0.6;
+            const outOfBounds =
+                bullet.x < 0 ||
+                bullet.x > BORDER_X ||
+                bullet.y < 0 ||
+                bullet.y > WORLD_H;
+
+            if (hitChopper) {
+                this.damageChopper();
+            }
+
+            if (hitChopper || crossedBorder || outOfBounds) {
+                bullet.destroy();
+                this.ufoBullets.splice(i, 1);
+            }
+        }
     }
 
     fire() {
